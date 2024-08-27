@@ -1,0 +1,70 @@
+function actualizarCalendario() {
+  // Mensaje de inicio para verificar que la función se está ejecutando
+  SpreadsheetApp.getActiveSpreadsheet().toast('Iniciando actualización del calendario...', 'Inicio', 10);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetReservas = ss.getSheetByName('RESERVAS');
+  const sheetCalendario = ss.getSheetByName('CALENDARIO');
+
+  // Combinar el rango B3:FK11
+  const rangeToMerge = sheetCalendario.getRange('B3:FK11');
+  rangeToMerge.merge();
+
+  // Descombinar el rango B3:FK11 para limpiarlo
+  rangeToMerge.breakApart();
+
+  // Obtener todos los datos de una vez
+  const reservas = sheetReservas.getRange(2, 1, sheetReservas.getLastRow() - 1, sheetReservas.getLastColumn()).getValues();
+  const headers = sheetCalendario.getRange(1, 2, 1, sheetCalendario.getLastColumn() - 1).getValues()[0];
+  const calendarData = sheetCalendario.getRange(2, 1, sheetCalendario.getLastRow() - 1, sheetCalendario.getLastColumn()).getValues();
+
+  // Crear un mapa de roomId a índices de fila
+  const roomIdMap = {};
+  calendarData.forEach((row, index) => {
+    roomIdMap[traducirRoomId(row[0])] = index + 2;
+  });
+
+  // Crear una estructura de datos para almacenar las actualizaciones
+  const updates = [];
+
+  reservas.forEach(reserva => {
+    const [, roomId, status, firstNightStr, lastNightStr, , , guestFull, , , , , , , , , , , , refererEditable] = reserva;
+
+    // Filtrar solo las reservas con estado "Confirmada" o "Nueva"
+    if (status !== "Confirmada" && status !== "Nueva") return;
+
+    const firstNight = new Date(firstNightStr);
+    const lastNight = new Date(lastNightStr);
+    const guestInfo = `${guestFull} ${status} ${refererEditable}`;
+    const rowIndex = roomIdMap[traducirRoomId(roomId)];
+
+    if (rowIndex !== undefined) {
+      let startColIndex = -1;
+      let endColIndex = -1;
+
+      headers.forEach((headerDate, col) => {
+        const date = new Date(headerDate);
+        if (date >= firstNight && date <= lastNight) {
+          if (startColIndex === -1) startColIndex = col + 2;
+          endColIndex = col + 2;
+        }
+      });
+
+      if (startColIndex !== -1 && endColIndex !== -1) {
+        updates.push({ rowIndex, startColIndex, endColIndex, guestInfo });
+      }
+    }
+  });
+
+  // Aplicar todas las actualizaciones de una vez
+  if (updates.length > 0) {
+    updates.forEach(update => {
+      const range = sheetCalendario.getRange(update.rowIndex, update.startColIndex, 1, update.endColIndex - update.startColIndex + 1);
+      range.setValue(update.guestInfo);
+      range.merge().setWrap(true);
+    });
+  }
+
+  // Mensaje final para confirmar que la actualización se completó
+  SpreadsheetApp.getActiveSpreadsheet().toast('El Calendario de Colores se ha Actualizado! todo fine', 'Actualización de Calendario', 10);
+}
