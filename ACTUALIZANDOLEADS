@@ -1,0 +1,124 @@
+function ACTUALIZANDOLEADS() {
+  try {
+    // Mensaje de inicio para verificar que la función se está ejecutando
+    SpreadsheetApp.getActiveSpreadsheet().toast('Iniciando actualización de leads...', 'Inicio', 10);
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var hojaReservas = ss.getSheetByName("RESERVAS");
+    var hojaLeads = ss.getSheetByName("LEADS");
+    var hojaLog = ss.getSheetByName("LOG") || ss.insertSheet("LOG");
+
+    var datosReservas = hojaReservas.getDataRange().getValues();
+    var datosLeads = hojaLeads.getDataRange().getValues();
+    var formulasLeads = hojaLeads.getDataRange().getFormulas();
+
+    var columnasReservas = {
+      bookid: 0, // Asegúrate de que esta es la columna correcta en la hoja RESERVAS
+      status: 2,
+      guestFull: 7,
+      roomId: 1,
+      firstNight: 3,
+      numAdult: 5,
+      numChild: 6,
+      guestPhone: 9
+    };
+
+    var columnasLeads = {
+      id: 0, // 'ID' ahora es la primera columna
+      nombre: 1,
+      apto: 2,
+      llegada: 3,
+      cantidad: 4,
+      telefono: 5,
+      prioridad: 6,
+      estado: 7,
+      whatsapp: 8,
+      ultimaGestion: 9
+    };
+
+    var reservasAEliminar = new Set();
+    var nuevasReservas = [];
+    // Ahora mapeará por ID en lugar de nombre
+    var leadsExistentes = new Map(datosLeads.slice(1).map(row => [row[columnasLeads.id], row]));
+    var cambios = {nuevas: 0, eliminadas: 0};
+
+    function formatearTelefono(telefono) {
+      if (typeof telefono !== 'string') return '';
+      telefono = telefono.replace(/[^0-9+]/g, '');
+      return telefono.startsWith('+') ? telefono : '+' + telefono;
+    }
+
+    for (var i = 1; i < datosReservas.length; i++) {
+      var fila = datosReservas[i];
+      var status = fila[columnasReservas.status].toString().toLowerCase();
+      var bookid = fila[columnasReservas.bookid]; // Usaremos el bookid como referencia
+
+      if (status === "confirmada" || status === "cancelada") {
+        reservasAEliminar.add(bookid);
+        if (leadsExistentes.has(bookid)) cambios.eliminadas++;
+      } else if (status === "nueva" && !leadsExistentes.has(bookid)) {
+        var telefono = formatearTelefono(fila[columnasReservas.guestPhone]);
+        nuevasReservas.push([
+          bookid,                         // ID (Columna A)
+          fila[columnasReservas.guestFull], // Nombre
+          fila[columnasReservas.roomId],    // Apto
+          fila[columnasReservas.firstNight], // Llegada
+          fila[columnasReservas.numAdult] + fila[columnasReservas.numChild], // Cantidad
+          telefono                          // Telefono
+        ]);
+        cambios.nuevas++;
+      }
+    }
+
+    var registrosActualizados = datosLeads.filter((fila, index) => index === 0 || !reservasAEliminar.has(fila[columnasLeads.id]));
+    registrosActualizados = registrosActualizados.concat(nuevasReservas);
+
+    var filasAEliminar = [];
+    datosLeads.forEach((fila, index) => {
+      if (index > 0 && reservasAEliminar.has(fila[columnasLeads.id])) {
+        filasAEliminar.push(index + 1);
+      }
+    });
+
+    if (filasAEliminar.length > 0) {
+      filasAEliminar.sort((a, b) => b - a);
+      filasAEliminar.forEach(fila => hojaLeads.deleteRow(fila));
+    }
+
+    // Encontrar la primera fila vacía desde la columna A hasta la F para las nuevas reservas
+    var filaInicioNuevasReservas = 1;
+    while (hojaLeads.getRange(filaInicioNuevasReservas, 1, 1, 6).getValues()[0].some(cell => cell !== '')) {
+      filaInicioNuevasReservas++;
+    }
+
+    if (nuevasReservas.length > 0) {
+      hojaLeads.getRange(filaInicioNuevasReservas, 1, nuevasReservas.length, nuevasReservas[0].length)
+        .setValues(nuevasReservas);
+
+      // Restaurar las fórmulas en la columna WhatsApp (columna I) si fueron sobrescritas
+      var rangoWhatsApp = hojaLeads.getRange(filaInicioNuevasReservas, columnasLeads.whatsapp + 1, nuevasReservas.length, 1);
+      var formulasWhatsApp = formulasLeads.slice(filaInicioNuevasReservas - 1, filaInicioNuevasReservas - 1 + nuevasReservas.length).map(row => [row[columnasLeads.whatsapp]]);
+      rangoWhatsApp.setFormulas(formulasWhatsApp);
+    }
+
+    // Ordenar las filas por fecha de llegada (columna D)
+    hojaLeads.getRange(2, 1, hojaLeads.getLastRow() - 1, hojaLeads.getLastColumn()).sort({column: columnasLeads.llegada + 1, ascending: true});
+
+    logCambios(hojaLog, cambios);
+
+    // Mensaje final para confirmar que la actualización se completó
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `Genial! se Eliminaron ${cambios.eliminadas} reservas y se Agregaron ${cambios.nuevas} nuevas!`,
+      'Actualización de Reservas', 10
+    );
+
+  } catch (error) {
+    Logger.log('Error en ACTUALIZANDOLEADS: ' + error.toString());
+    SpreadsheetApp.getActiveSpreadsheet().toast('Ocurrió un error al actualizar los leads de reservas.', 'Error', 10);
+  }
+}
+
+function logCambios(hojaLog, cambios) {
+  var fecha = new Date();
+  hojaLog.appendRow([fecha, cambios.nuevas, cambios.eliminadas]);
+}
