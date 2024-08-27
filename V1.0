@@ -1,0 +1,155 @@
+function obtenerReservasBeds24() {
+  // Mensaje de inicio para verificar que la función se está ejecutando
+  SpreadsheetApp.getActiveSpreadsheet().toast('Iniciando actualización de reservas...', 'Inicio', 10);
+
+  var url = "https://api.beds24.com/json/getBookings";
+  var apiKey = "abcdef1234567890"; // Reemplaza con tu API Key
+  var propKeys = ["propkey1234567890", "propkey1234567891", "propkey1234567892", "propkey1234567893", "propkey1234567894", "propkey1234567895", "propkey1234567896", "propkey1234567897", "propkey1234567899"]; // Reemplaza con tus Prop Keys
+
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("RESERVAS");
+  var headers = ["bookId", "roomId", "status", "firstNight", "lastNight", "numAdult", "numChild", "guestFull", "guestEmail", "guestPhone", "guestCountry", "guestCountry2", "guestComments", "notes", "flagColor", "price", "tax", "commission", "rateDescription", "refererEditable", "apiReference", "propId", "ownerId", "bookingTime", "modified", "cancelTime"];
+
+  // Crear un diccionario de reservas existentes usando bookId como clave
+  var existingDataRange = sheet.getDataRange();
+  var existingData = existingDataRange.getValues();
+  var existingBookings = {};
+
+  for (var row = 1; row < existingData.length; row++) { // Empezar desde 1 para omitir encabezados
+    var bookId = existingData[row][0];
+    if (bookId) {
+      existingBookings[bookId] = row;
+    }
+  }
+
+  var cambios = {nuevas: 0, actualizadas: 0, canceladas: 0, confirmadas: 0};
+
+  propKeys.forEach(function(propKey) {
+    var postData = {
+      authentication: {
+        apiKey: apiKey,
+        propKey: propKey
+      },
+      bookings: {}
+    };
+
+    var options = {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(postData)
+    };
+
+    var response = UrlFetchApp.fetch(url, options);
+    var json = JSON.parse(response.getContentText());
+
+    if (json.length > 0) {
+      json.forEach(function(booking) {
+        var row = [];
+        headers.forEach(function(header) {
+          var value;
+          if (header === "status") {
+            value = traducirStatus(booking[header]);
+          } else if (header === "roomId") {
+            value = traducirRoomId(booking[header]);
+          } else if (header === "guestFull") {
+            value = booking["guestTitle"] + " " + booking["guestFirstName"] + " " + booking["guestName"];
+          } else if (header === "price" || header === "commission" || header === "tax") {
+            value = formatearNumero(booking[header]);
+          } else if (header === "guestPhone") {
+            value = formatearTelefono(booking[header]);
+          } else {
+            value = booking[header] || "";
+          }
+          row.push(value);
+        });
+
+        // Verificar si la reserva ya existe
+        if (booking.bookId in existingBookings) {
+          var existingRow = existingBookings[booking.bookId];
+          var updateNeeded = false;
+          var previousStatus = existingData[existingRow][2]; // Obtener el estado previo
+
+          // Comparar cada celda
+          for (var col = 0; col < headers.length; col++) {
+            if (sheet.getRange(existingRow + 1, col + 1).getValue() != row[col]) {
+              updateNeeded = true;
+              break;
+            }
+          }
+
+          if (updateNeeded) {
+            sheet.getRange(existingRow + 1, 1, 1, headers.length).setValues([row]);
+            Logger.log('Updated booking: ' + booking.bookId);
+            cambios.actualizadas++;
+
+            // Contar cambios en el estado de la reserva
+            if (previousStatus === "Confirmada" || previousStatus === "Nueva") {
+              if (booking.status === 0) cambios.canceladas++; // Confirmada/Nueva a Cancelada
+            }
+
+            if (previousStatus === "Nueva" || previousStatus === "Cancelada") {
+              if (booking.status === 1) cambios.confirmadas++; // Nueva/Cancelada a Confirmada
+            }
+          }
+        } else {
+          sheet.appendRow(row);
+          Logger.log('Added new booking: ' + booking.bookId);
+          cambios.nuevas++;
+
+          // Contar nuevas reservas canceladas y confirmadas
+          if (booking.status == 0) cambios.canceladas++;
+          if (booking.status == 1) cambios.confirmadas++;
+        }
+      });
+    } else {
+      Logger.log("No bookings found for propKey: " + propKey);
+    }
+  });
+
+  // Mostrar el nuevo mensaje con los cambios realizados
+  var mensaje = `Oh Yeah! Se agregaron ${cambios.nuevas} nuevas reservas, ` +
+                `se Cancelaron ${cambios.canceladas} y se confirmaron ${cambios.confirmadas}! ` +
+                `la Buena Pa´ Uds!`;
+  SpreadsheetApp.getActiveSpreadsheet().toast(mensaje, 'Actualización de Reservas', 10);
+}
+
+function traducirStatus(status) {
+  var statusMap = {
+    0: "Cancelada",
+    1: "Confirmada",
+    2: "Nueva",
+    3: "Solicita Reubicar",
+    4: "Bloqueado",
+    5: "Cotización"
+  };
+  return statusMap[status] || "Desconocido";
+}
+
+function traducirRoomId(roomId) {
+  var roomIdMap = {
+    378319: "814",
+    378317: "1317",
+    378321: "1722A",
+    378318: "1722B",
+    378316: "1820",
+    378110: "2005A",
+    378320: "2005B",
+    378884: "B33",
+    506591: "715" // Nueva traducción agregada
+  };
+  return roomIdMap[roomId] || roomId; // Retorna el roomId original si no se encuentra en el mapa
+}
+
+function formatearNumero(numero) {
+  if (numero == null || numero === "" || isNaN(numero)) {
+    return "";
+  }
+  return Number(numero).toFixed(2).replace(".", ",");
+}
+
+function formatearTelefono(telefono) {
+  if (telefono == null || telefono === "") {
+    return "";
+  }
+  // Asegurarse de que el número comience con un apóstrofo
+  return "'" + telefono.toString().replace(/^'+/, '');
+}
