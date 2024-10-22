@@ -1,0 +1,237 @@
+function actualizarReservasBeds24() {
+  // Mostrar mensaje de inicio
+  SpreadsheetApp.getActiveSpreadsheet().toast('Iniciando actualización de reservas...', 'Inicio', 10);
+
+  // Configuración de la API
+  var url = "https://api.beds24.com/json/getBookings";
+  var apiKey = "abcdef1234567890"; // Reemplaza con tu API Key
+  var propKeys = [
+    "propkey1234567890",
+    "propkey1234567891",
+    "propkey1234567892",
+    "propkey1234567893",
+    "propkey1234567894",
+    "propkey1234567895",
+    "propkey1234567896",
+    "propkey1234567897",
+    "propkey1234567899"
+  ]; // Reemplaza con tus Prop Keys
+
+  // Hoja de cálculo y encabezados
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = spreadsheet.getSheetByName("RESERVAS");
+  var headers = [
+    "bookId", "roomId", "status", "firstNight", "lastNight", "numAdult", "numChild",
+    "guestFull", "guestEmail", "guestPhone", "guestCountry", "guestCountry2",
+    "guestComments", "notes", "flagColor", "price", "tax", "commission",
+    "rateDescription", "refererEditable", "apiReference", "propId", "ownerId",
+    "bookingTime", "modified", "cancelTime"
+  ];
+
+  // Obtener datos existentes
+  var existingDataRange = sheet.getDataRange();
+  var existingData = existingDataRange.getValues();
+  var existingBookings = {}; // bookId como clave y fila como valor
+
+  // Crear mapa de reservas existentes
+  for (var i = 1; i < existingData.length; i++) { // Comenzar desde 1 para omitir encabezados
+    var bookId = existingData[i][0];
+    if (bookId) {
+      existingBookings[bookId] = i;
+    }
+  }
+
+  // Contadores de cambios
+  var cambios = { nuevas: 0, actualizadas: 0, canceladas: 0, confirmadas: 0 };
+
+  // Mapas de traducción
+  var statusMap = {
+    0: "Cancelada",
+    1: "Confirmada",
+    2: "Nueva",
+    3: "Solicita Reubicar",
+    4: "Bloqueado",
+    5: "Cotización"
+  };
+
+  var roomIdMap = {
+    "378319": "814",
+    "378317": "1317",
+    "378321": "1722A",
+    "378318": "1722B",
+    "378316": "1820",
+    "378110": "2005A",
+    "378320": "2005B",
+    "378884": "B33",
+    "506591": "715"
+  };
+
+  // Funciones auxiliares
+  function traducirStatus(status) {
+    return statusMap[status] || "Desconocido";
+  }
+
+  function traducirRoomId(roomId) {
+    var roomIdStr = String(roomId).trim();
+    return roomIdMap[roomIdStr] || roomIdStr;
+  }
+
+  function formatearNumero(numero) {
+    if (numero == null || numero === "" || isNaN(numero)) {
+      return "";
+    }
+    return Number(numero).toFixed(2).replace(".", ",");
+  }
+
+  function formatearTelefono(telefono) {
+    if (telefono == null || telefono === "") {
+      return "";
+    }
+    return "'" + telefono.toString().replace(/^'+/, '');
+  }
+
+  // Procesar cada propiedad
+  propKeys.forEach(function(propKey) {
+    // Configuración de la solicitud
+    var postData = {
+      authentication: {
+        apiKey: apiKey,
+        propKey: propKey
+      },
+      bookings: {}
+    };
+
+    var options = {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(postData)
+    };
+
+    // Realizar la solicitud a la API
+    var response = UrlFetchApp.fetch(url, options);
+    var bookings = JSON.parse(response.getContentText());
+
+    if (bookings.length > 0) {
+      bookings.forEach(function(booking) {
+        // Construir la fila de datos
+        var row = [];
+        headers.forEach(function(header) {
+          var value;
+
+          switch (header) {
+            case "bookId":
+            case "status":
+            case "firstNight":
+            case "lastNight":
+            case "numAdult":
+            case "numChild":
+            case "guestEmail":
+            case "guestCountry":
+            case "guestCountry2":
+            case "guestComments":
+            case "notes":
+            case "flagColor":
+            case "price":
+            case "tax":
+            case "commission":
+            case "rateDescription":
+            case "refererEditable":
+            case "apiReference":
+            case "propId":
+            case "ownerId":
+            case "bookingTime":
+            case "modified":
+            case "cancelTime":
+              value = booking[header] || "";
+              break;
+            case "roomId":
+              // Verificar si roomId está directamente en booking o en booking["rooms"][0]["roomId"]
+              if (booking["roomId"]) {
+                value = traducirRoomId(booking["roomId"]);
+              } else if (booking["rooms"] && booking["rooms"].length > 0) {
+                value = traducirRoomId(booking["rooms"][0]["roomId"]);
+              } else {
+                value = "Desconocido";
+              }
+              break;
+            case "guestFull":
+              value = (booking["guestTitle"] || "") + " " +
+                      (booking["guestFirstName"] || "") + " " +
+                      (booking["guestName"] || "");
+              value = value.trim();
+              break;
+            case "guestPhone":
+              value = formatearTelefono(booking["guestPhone"]);
+              break;
+            default:
+              value = "";
+          }
+
+          // Formatear números si es necesario
+          if (["price", "tax", "commission"].includes(header)) {
+            value = formatearNumero(value);
+          }
+
+          // Traducir el estado
+          if (header === "status") {
+            value = traducirStatus(value);
+          }
+
+          row.push(value);
+        });
+
+        var bookId = booking["bookId"];
+        // Verificar si la reserva ya existe
+        if (existingBookings.hasOwnProperty(bookId)) {
+          var existingRowIndex = existingBookings[bookId];
+          var existingRow = existingData[existingRowIndex];
+          var updateNeeded = false;
+
+          // Comparar cada campo
+          for (var j = 0; j < headers.length; j++) {
+            if (existingRow[j] != row[j]) {
+              updateNeeded = true;
+              break;
+            }
+          }
+
+          if (updateNeeded) {
+            // Actualizar la fila en la hoja
+            sheet.getRange(existingRowIndex + 1, 1, 1, headers.length).setValues([row]);
+            cambios.actualizadas++;
+
+            // Actualizar contadores de estado
+            var previousStatus = existingRow[2]; // Columna de 'status'
+            var newStatus = row[2];
+
+            if ((previousStatus === "Confirmada" || previousStatus === "Nueva") && newStatus === "Cancelada") {
+              cambios.canceladas++;
+            }
+
+            if ((previousStatus === "Nueva" || previousStatus === "Cancelada") && newStatus === "Confirmada") {
+              cambios.confirmadas++;
+            }
+          }
+        } else {
+          // Agregar nueva reserva
+          sheet.appendRow(row);
+          cambios.nuevas++;
+
+          // Actualizar contadores de estado
+          var statusActual = row[2]; // Columna de 'status'
+          if (statusActual === "Cancelada") cambios.canceladas++;
+          if (statusActual === "Confirmada") cambios.confirmadas++;
+        }
+      });
+    } else {
+      Logger.log("No se encontraron reservas para propKey: " + propKey);
+    }
+  });
+
+  // Mostrar mensaje de finalización
+  var mensaje = `¡Actualización completa!
+Se agregaron ${cambios.nuevas} nuevas reservas,
+se cancelaron ${cambios.canceladas} y se confirmaron ${cambios.confirmadas}.`;
+  SpreadsheetApp.getActiveSpreadsheet().toast(mensaje, 'Actualización de Reservas', 10);
+}
+
